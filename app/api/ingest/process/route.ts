@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { parsePdf } from '@/lib/parsers/pdf';
-import { parseDocx } from '@/lib/parsers/docx';
-import { parseCsv } from '@/lib/parsers/csv';
-import { bulletHash } from '@/lib/dedup/hash';
+import { createServerClient } from '@/lib/supabase/server';
+import { extractPdfText } from '@/lib/parsers/pdf';
+import { extractDocxText } from '@/lib/parsers/docx';
+import { extractCsvText } from '@/lib/parsers/csv';
+import { contentHash } from '@/lib/dedup/hash';
+import { detectSectionsFromText } from '@/lib/parsers/sections';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,7 @@ async function handleUpload(request: NextRequest) {
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  const supabase = await createSupabaseServerClient();
+  const supabase = createServerClient();
 
   const { data: resumeRecord, error: insertError } = await supabase
     .from('rm_source_resumes')
@@ -45,19 +46,16 @@ async function handleUpload(request: NextRequest) {
 
   if (insertError) throw insertError;
 
-  let parsed;
   let rawText = '';
 
   try {
     if (ext === 'pdf') {
-      parsed = await parsePdf(buffer);
+      rawText = await extractPdfText(buffer);
     } else if (ext === 'docx') {
-      parsed = await parseDocx(buffer);
+      rawText = await extractDocxText(buffer);
     } else if (ext === 'csv') {
-      parsed = await parseCsv(buffer);
+      rawText = await extractCsvText(buffer);
     }
-    
-    rawText = parsed?.rawText || '';
   } catch (parseError) {
     await supabase
       .from('rm_source_resumes')
@@ -72,9 +70,11 @@ async function handleUpload(request: NextRequest) {
     .update({ raw_text: rawText })
     .eq('id', resumeRecord.id);
 
+  const sections = detectSectionsFromText(rawText);
+
   return {
     resumeId: resumeRecord.id,
-    sections: parsed!.sections,
+    sections,
   };
 }
 
@@ -83,7 +83,7 @@ async function handleStage(resumeId: string, sections: any, supabase: any) {
   let duplicates = 0;
 
   for (const bullet of sections.experience) {
-    const hash = bulletHash(bullet);
+    const hash = contentHash(bullet);
 
     const { data: existing } = await supabase
       .from('rm_bullets_staging')
@@ -156,7 +156,7 @@ async function handleStage(resumeId: string, sections: any, supabase: any) {
   }
 
   let intros = 0;
-  const contentHash = require('crypto')
+  const introContentHash = require('crypto')
     .createHash('sha256')
     .update(sections.intro.join(' '))
     .digest('hex');
@@ -168,7 +168,7 @@ async function handleStage(resumeId: string, sections: any, supabase: any) {
     const { data: existingIntro } = await supabase
       .from('rm_intros')
       .select('id')
-      .eq('content_hash', contentHash)
+      .eq('content_hash', introContentHash)
       .single();
 
     let introId = existingIntro?.id;
@@ -176,7 +176,7 @@ async function handleStage(resumeId: string, sections: any, supabase: any) {
     if (!introId) {
       const { data: newIntro } = await supabase
         .from('rm_intros')
-        .insert({ content: introTrimmed, content_hash: contentHash })
+        .insert({ content: introTrimmed, content_hash: introContentHash })
         .select()
         .single();
       introId = newIntro?.id;
@@ -206,7 +206,7 @@ export async function POST(request: NextRequest) {
   try {
     const uploadResult = await handleUpload(request);
     
-    const supabase = await createSupabaseServerClient();
+  const supabase = createServerClient();
     const stageResult = await handleStage(uploadResult.resumeId, uploadResult.sections, supabase);
 
     await supabase

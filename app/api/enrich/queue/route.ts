@@ -21,8 +21,7 @@ export async function GET(request: NextRequest) {
       .select(`
         id,
         raw_text,
-        company_name_raw,
-        company:rmc_companies (name)
+        company_name_raw
       `)
       .eq('is_duplicate', false)
       .order('created_at', { ascending: true })
@@ -45,7 +44,7 @@ export async function GET(request: NextRequest) {
     const formatted = (queue || []).map((item: any) => ({
       id: item.id,
       raw_text: item.raw_text,
-      company_name: item.company?.name || item.company_name_raw || 'Unknown',
+      company_name: item.company_name_raw || 'Unknown',
     }))
 
     return NextResponse.json(formatted)

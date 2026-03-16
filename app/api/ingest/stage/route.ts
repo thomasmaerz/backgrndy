@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { bulletHash } from '@/lib/dedup/hash';
+import { createServerClient } from '@/lib/supabase/server';
+import { contentHash } from '@/lib/dedup/hash';
 import { ParsedResume } from '@/lib/parsers/sections';
 
 export async function POST(request: NextRequest) {
@@ -17,14 +17,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = await createSupabaseServerClient();
+    const supabase = createServerClient();
 
     let staged = 0;
     let duplicates = 0;
 
     // Process experience bullets with dedup
     for (const bullet of sections.experience) {
-      const hash = bulletHash(bullet);
+      const hash = contentHash(bullet);
 
       const { data: existing } = await supabase
         .from('rm_bullets_staging')
@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
 
     // Process intros with junction table
     let intros = 0;
-    const contentHash = require('crypto')
+    const introContentHash = require('crypto')
       .createHash('sha256')
       .update(sections.intro.join(' '))
       .digest('hex');
@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
       const { data: introRecord, error: introError } = await supabase
         .from('rm_intros')
         .upsert(
-          { content: introTrimmed, content_hash: contentHash },
+          { content: introTrimmed, content_hash: introContentHash },
           { onConflict: 'content_hash', ignoreDuplicates: true }
         )
         .select()
